@@ -29,7 +29,7 @@ class Akvarelatedcategories extends Module
     {
         $this->name = 'akvarelatedcategories';
         $this->tab = 'seo';
-        $this->version = '1.0.2';
+        $this->version = '1.0.3';
         $this->author = 'Akva Modules';
         $this->need_instance = 0;
         $this->ps_versions_compliancy = ['min' => '1.7.0.0', 'max' => _PS_VERSION_];
@@ -37,9 +37,9 @@ class Akvarelatedcategories extends Module
 
         parent::__construct();
 
-        $this->displayName = $this->l('Povezane kategorije (SEO notranje povezave)');
-        $this->description = $this->l('SEO notranje povezave: pod vsako kategorijo prikaže povezane kategorije (nadkategorija, sokategorije, podkategorije), pod izdelkom pa kategorije, v katere spada. Diskretno na dnu, polno indeksabilno.');
-        $this->confirmUninstall = $this->l('Odstraniti modul? Odstranijo se le njegove nastavitve; kategorije in izdelki ostanejo nedotaknjeni.');
+        $this->displayName = $this->l('Related categories (SEO internal links)');
+        $this->description = $this->l('SEO internal links: shows related categories under each category page (parent, siblings, children), and the categories a product belongs to under each product page. Discreetly placed at the bottom, fully indexable.');
+        $this->confirmUninstall = $this->l('Uninstall the module? Only its settings are removed; categories and products remain untouched.');
     }
 
     // ------------------------------------------------------------------
@@ -216,7 +216,7 @@ class Akvarelatedcategories extends Module
             }
             $title = (string) Configuration::get('AKVARC_CAT_TITLE', $idLang);
 
-            return $this->renderBlock($title, $items, 'category');
+            return $this->renderBlock($title, $items, 'category', $idLang);
         } catch (Throwable $e) {
             return '';
         }
@@ -244,7 +244,7 @@ class Akvarelatedcategories extends Module
             }
             $title = (string) Configuration::get('AKVARC_PROD_TITLE', $idLang);
 
-            return $this->renderBlock($title, $items, 'product');
+            return $this->renderBlock($title, $items, 'product', $idLang);
         } catch (Throwable $e) {
             return '';
         }
@@ -413,12 +413,21 @@ class Akvarelatedcategories extends Module
     /**
      * @param list<array{id:int,name:string,url:string}> $items
      */
-    private function renderBlock(string $title, array $items, string $variant): string
+    private function renderBlock(string $title, array $items, string $variant, int $idLang): string
     {
         if ($items === []) {
             return '';
         }
-        $label = $title !== '' ? $title : ($variant === 'product' ? 'Kategorije' : 'Povezane kategorije');
+        if ($title !== '') {
+            $label = $title;
+        } else {
+            // Only reached if a language was added after install/upgrade and never
+            // backfilled -- fall back to a title in the SHOP's language, not a
+            // fixed one, so a newly-added language never silently shows Slovenian.
+            $iso = (string) Language::getIsoById($idLang);
+            $t = self::titlesForIso($iso);
+            $label = $variant === 'product' ? $t['prod'] : $t['cat'];
+        }
 
         $h = '<nav class="akva-rc akva-rc--' . self::esc($variant) . '" aria-label="' . self::esc($label) . '">';
         // De-emphasised supplementary nav: a styled <p>, NOT an <h2>. A small muted
@@ -475,7 +484,7 @@ class Akvarelatedcategories extends Module
         Configuration::updateGlobalValue('AKVARC_CAT_TITLE', $catTitle);
         Configuration::updateGlobalValue('AKVARC_PROD_TITLE', $prodTitle);
 
-        return '<div class="alert alert-success">' . self::esc($this->l('Nastavitve shranjene.')) . '</div>';
+        return '<div class="alert alert-success">' . self::esc($this->l('Settings saved.')) . '</div>';
     }
 
     private function renderConfig(): string
@@ -517,25 +526,25 @@ class Akvarelatedcategories extends Module
                 . '</div></div>';
         };
 
-        $body = $row($this->l('Vključi modul'), $this->l('Glavno stikalo. Izklop skrije oba bloka povezav.'), $sw('AKVARC_ENABLED', $this->l('Da'), $this->l('Ne')))
-            . '<hr><h4>' . self::esc($this->l('Kategorija (pod izdelki v arhivu)')) . '</h4>'
-            . $row($this->l('Število povezav'), $this->l('Največje skupno število povezanih kategorij (privzeto 10).'),
+        $body = $row($this->l('Enable module'), $this->l('Master switch. Turning it off hides both link blocks.'), $sw('AKVARC_ENABLED', $this->l('Yes'), $this->l('No')))
+            . '<hr><h4>' . self::esc($this->l('Category (shown below the product listing in the archive)')) . '</h4>'
+            . $row($this->l('Number of links'), $this->l('Maximum total number of related categories (default 10).'),
                 '<input type="number" min="1" max="50" class="form-control fixed-width-sm" name="AKVARC_CAT_MAX" value="' . $catMax . '">')
-            . $row($this->l('Vključi nadkategorijo'), '', $sw('AKVARC_INC_PARENT', $this->l('Da'), $this->l('Ne')))
-            . $row($this->l('Vključi sokategorije'), $this->l('Kategorije z isto nadkategorijo.'), $sw('AKVARC_INC_SIBLINGS', $this->l('Da'), $this->l('Ne')))
-            . $row($this->l('Vključi podkategorije'), '', $sw('AKVARC_INC_CHILDREN', $this->l('Da'), $this->l('Ne')))
-            . $row($this->l('Naslov bloka'), $this->l('Za vsak jezik. Pojavi se nad povezavami.'), $langInputs('AKVARC_CAT_TITLE_', 'AKVARC_CAT_TITLE'))
-            . '<hr><h4>' . self::esc($this->l('Izdelek (na dnu strani izdelka)')) . '</h4>'
-            . $row($this->l('Število kategorij'), $this->l('Največje število kategorij, v katere izdelek spada (privzeto 5).'),
+            . $row($this->l('Include parent category'), '', $sw('AKVARC_INC_PARENT', $this->l('Yes'), $this->l('No')))
+            . $row($this->l('Include sibling categories'), $this->l('Categories that share the same parent.'), $sw('AKVARC_INC_SIBLINGS', $this->l('Yes'), $this->l('No')))
+            . $row($this->l('Include child categories'), '', $sw('AKVARC_INC_CHILDREN', $this->l('Yes'), $this->l('No')))
+            . $row($this->l('Block title'), $this->l('Per language. Appears above the links.'), $langInputs('AKVARC_CAT_TITLE_', 'AKVARC_CAT_TITLE'))
+            . '<hr><h4>' . self::esc($this->l('Product (at the bottom of the product page)')) . '</h4>'
+            . $row($this->l('Number of categories'), $this->l('Maximum number of categories the product belongs to (default 5).'),
                 '<input type="number" min="1" max="50" class="form-control fixed-width-sm" name="AKVARC_PROD_MAX" value="' . $prodMax . '">')
-            . $row($this->l('Naslov bloka'), $this->l('Za vsak jezik.'), $langInputs('AKVARC_PROD_TITLE_', 'AKVARC_PROD_TITLE'));
+            . $row($this->l('Block title'), $this->l('Per language.'), $langInputs('AKVARC_PROD_TITLE_', 'AKVARC_PROD_TITLE'));
 
         return '<form method="post" class="form-horizontal">'
             . '<div class="panel">'
-            . '<div class="panel-heading"><i class="icon-link"></i> ' . self::esc($this->l('Povezane kategorije -- SEO notranje povezave')) . '</div>'
-            . '<div class="alert alert-info">' . self::esc($this->l('Bloki so diskretni (drobni, sivi, na dnu) a polno indeksabilni -- prave povezave z imeni kategorij kot sidrnim besedilom. Namerno NISO skriti: skrivanje notranjih povezav je prikrivanje (cloaking) in tvega kazen.')) . '</div>'
+            . '<div class="panel-heading"><i class="icon-link"></i> ' . self::esc($this->l('Related categories -- SEO internal links')) . '</div>'
+            . '<div class="alert alert-info">' . self::esc($this->l('The blocks are discreet (small, grey, at the bottom) but fully indexable -- real links using category names as anchor text. They are intentionally NOT hidden: hiding internal links is cloaking and risks a penalty.')) . '</div>'
             . $body
-            . '<div class="panel-footer"><button type="submit" name="submitAkvarc" class="btn btn-primary pull-right"><i class="process-icon-save"></i> ' . self::esc($this->l('Shrani')) . '</button></div>'
+            . '<div class="panel-footer"><button type="submit" name="submitAkvarc" class="btn btn-primary pull-right"><i class="process-icon-save"></i> ' . self::esc($this->l('Save')) . '</button></div>'
             . '</div></form>';
     }
 }
