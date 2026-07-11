@@ -23,13 +23,15 @@ if (!defined('_PS_VERSION_')) {
     exit;
 }
 
+require_once __DIR__ . '/classes/AkvarcDescriptionLinker.php';
+
 class Akvarelatedcategories extends Module
 {
     public function __construct()
     {
         $this->name = 'akvarelatedcategories';
         $this->tab = 'seo';
-        $this->version = '1.0.3';
+        $this->version = '1.1.1';
         $this->author = 'Akva Modules';
         $this->need_instance = 0;
         $this->ps_versions_compliancy = ['min' => '1.7.0.0', 'max' => _PS_VERSION_];
@@ -47,7 +49,11 @@ class Akvarelatedcategories extends Module
     // ------------------------------------------------------------------
 
     /** Hooks this module renders on every page type. */
-    private const HOOKS = ['displayHeader', 'displayFooterCategory', 'displayFooterProduct'];
+    private const HOOKS = [
+        'displayHeader', 'displayFooterCategory', 'displayFooterProduct',
+        // v1.1.0 -- description inner-linking (see AkvarcDescriptionLinker).
+        'filterCategoryContent', 'filterProductContent', 'filterCmsContent',
+    ];
 
     public function install(): bool
     {
@@ -88,6 +94,9 @@ class Akvarelatedcategories extends Module
             'AKVARC_ENABLED', 'AKVARC_CAT_MAX', 'AKVARC_PROD_MAX',
             'AKVARC_INC_PARENT', 'AKVARC_INC_SIBLINGS', 'AKVARC_INC_CHILDREN',
             'AKVARC_CAT_TITLE', 'AKVARC_PROD_TITLE',
+            'AKVARC_IL_ENABLED', 'AKVARC_IL_CAT', 'AKVARC_IL_PROD', 'AKVARC_IL_CMS',
+            'AKVARC_IL_MAX', 'AKVARC_IL_RANDOM', 'AKVARC_IL_MINLEN', 'AKVARC_IL_ONCE',
+            'AKVARC_IL_SELF', 'AKVARC_IL_DESC_SHORT', 'AKVARC_IL_EXCLUDE_IDS',
         ] as $key) {
             Configuration::deleteByName($key);
         }
@@ -103,6 +112,21 @@ class Akvarelatedcategories extends Module
         Configuration::updateGlobalValue('AKVARC_INC_PARENT', '1');
         Configuration::updateGlobalValue('AKVARC_INC_SIBLINGS', '1');
         Configuration::updateGlobalValue('AKVARC_INC_CHILDREN', '1');
+
+        // v1.1.0 -- description inner-linking, opt-in (rewriting body HTML is more aggressive
+        // than the v1 footer block, so new installs get sane defaults but the feature itself
+        // stays off until the merchant explicitly enables it).
+        Configuration::updateGlobalValue('AKVARC_IL_ENABLED', '0');
+        Configuration::updateGlobalValue('AKVARC_IL_CAT', '1');
+        Configuration::updateGlobalValue('AKVARC_IL_PROD', '1');
+        Configuration::updateGlobalValue('AKVARC_IL_CMS', '1');
+        Configuration::updateGlobalValue('AKVARC_IL_MAX', '3');
+        Configuration::updateGlobalValue('AKVARC_IL_RANDOM', '1');
+        Configuration::updateGlobalValue('AKVARC_IL_MINLEN', '3');
+        Configuration::updateGlobalValue('AKVARC_IL_ONCE', '1');
+        Configuration::updateGlobalValue('AKVARC_IL_SELF', '0');
+        Configuration::updateGlobalValue('AKVARC_IL_DESC_SHORT', '0');
+        Configuration::updateGlobalValue('AKVARC_IL_EXCLUDE_IDS', '');
 
         $this->applyTitleDefaults();
     }
@@ -248,6 +272,245 @@ class Akvarelatedcategories extends Module
         } catch (Throwable $e) {
             return '';
         }
+    }
+
+    // ------------------------------------------------------------------
+    // Description inner-linking (v1.1.0) -- see AkvarcDescriptionLinker.
+    // ------------------------------------------------------------------
+
+    /**
+     * Category description: link mentions of other active category names.
+     *
+     * @param array{object:mixed} $params
+     * @return array{object:mixed}
+     */
+    public function hookFilterCategoryContent($params)
+    {
+        try {
+            if (!$this->descriptionLinkingActive('AKVARC_IL_CAT')) {
+                return $params;
+            }
+            $obj = $params['object'] ?? null;
+            if ($obj === null) {
+                return $params;
+            }
+            $html = (string) ($obj['description'] ?? '');
+            if ($html === '') {
+                return $params;
+            }
+            $idLang = (int) $this->context->language->id;
+            $idShop = (int) $this->context->shop->id;
+            $idCategory = $this->currentCategoryId();
+            $exclude = [];
+            if ($idCategory > 0 && (string) Configuration::get('AKVARC_IL_SELF') !== '1') {
+                $exclude[$idCategory] = true;
+            }
+            $glossary = $this->descriptionLinkGlossary($idLang, $idShop, $exclude);
+            if ($glossary === []) {
+                return $params;
+            }
+            $new = AkvarcDescriptionLinker::process($html, $glossary, $this->descriptionLinkOptions('cat', $idCategory, $idLang));
+            if ($new !== $html) {
+                $obj['description'] = $new;
+            }
+
+            return ['object' => $obj];
+        } catch (Throwable $e) {
+            return $params;
+        }
+    }
+
+    /**
+     * Product description (+ optionally description_short): link mentions of active categories.
+     *
+     * @param array{object:mixed} $params
+     * @return array{object:mixed}
+     */
+    public function hookFilterProductContent($params)
+    {
+        try {
+            if (!$this->descriptionLinkingActive('AKVARC_IL_PROD')) {
+                return $params;
+            }
+            $obj = $params['object'] ?? null;
+            if ($obj === null) {
+                return $params;
+            }
+            $idLang = (int) $this->context->language->id;
+            $idShop = (int) $this->context->shop->id;
+            $glossary = $this->descriptionLinkGlossary($idLang, $idShop);
+            if ($glossary === []) {
+                return $params;
+            }
+            $idProduct = (int) ($obj['id_product'] ?? $obj['id'] ?? 0);
+            $opts = $this->descriptionLinkOptions('prod', $idProduct, $idLang);
+            $changed = false;
+
+            $html = (string) ($obj['description'] ?? '');
+            if ($html !== '') {
+                $new = AkvarcDescriptionLinker::process($html, $glossary, $opts);
+                if ($new !== $html) {
+                    $obj['description'] = $new;
+                    $changed = true;
+                }
+            }
+
+            if ((string) Configuration::get('AKVARC_IL_DESC_SHORT') === '1') {
+                $short = (string) ($obj['description_short'] ?? '');
+                if ($short !== '') {
+                    $newShort = AkvarcDescriptionLinker::process($short, $glossary, $opts);
+                    if ($newShort !== $short) {
+                        $obj['description_short'] = $newShort;
+                        $changed = true;
+                    }
+                }
+            }
+
+            return $changed ? ['object' => $obj] : $params;
+        } catch (Throwable $e) {
+            return $params;
+        }
+    }
+
+    /**
+     * CMS page content: link mentions of active categories.
+     *
+     * @param array{object:mixed} $params
+     * @return array{object:mixed}
+     */
+    public function hookFilterCmsContent($params)
+    {
+        try {
+            if (!$this->descriptionLinkingActive('AKVARC_IL_CMS')) {
+                return $params;
+            }
+            $obj = $params['object'] ?? null;
+            if (!is_array($obj)) {
+                return $params;
+            }
+            $html = (string) ($obj['content'] ?? '');
+            if ($html === '') {
+                return $params;
+            }
+            $idLang = (int) $this->context->language->id;
+            $idShop = (int) $this->context->shop->id;
+            $glossary = $this->descriptionLinkGlossary($idLang, $idShop);
+            if ($glossary === []) {
+                return $params;
+            }
+            $idCms = (int) ($obj['id_cms'] ?? $obj['id'] ?? 0);
+            $new = AkvarcDescriptionLinker::process($html, $glossary, $this->descriptionLinkOptions('cms', $idCms, $idLang));
+            if ($new === $html) {
+                return $params;
+            }
+            $obj['content'] = $new;
+
+            return ['object' => $obj];
+        } catch (Throwable $e) {
+            return $params;
+        }
+    }
+
+    /** Master switch AND feature switch AND the given per-content-type switch. */
+    private function descriptionLinkingActive(string $scopeKey): bool
+    {
+        return $this->enabled()
+            && (string) Configuration::get('AKVARC_IL_ENABLED') === '1'
+            && (string) Configuration::get($scopeKey) === '1';
+    }
+
+    /** @return array{max:int,random:bool,minLen:int,once:bool,entitySeed:string,linkBuilder:callable} */
+    private function descriptionLinkOptions(string $entityType, int $entityId, int $idLang): array
+    {
+        return [
+            'max' => max(0, (int) Configuration::get('AKVARC_IL_MAX')),
+            'random' => (string) Configuration::get('AKVARC_IL_RANDOM') === '1',
+            'minLen' => max(1, (int) Configuration::get('AKVARC_IL_MINLEN')),
+            'once' => (string) Configuration::get('AKVARC_IL_ONCE') === '1',
+            'entitySeed' => $entityType . ':' . $entityId,
+            'linkBuilder' => function (array $cat) use ($idLang): string {
+                $rewrite = $cat['rewrite'] !== '' ? $cat['rewrite'] : null;
+
+                return (string) $this->context->link->getCategoryLink($cat['id'], $rewrite, $idLang);
+            },
+        ];
+    }
+
+    /** @var array<string,list<array{id:int,name:string,rewrite:string}>> */
+    private static $glossaryCache = [];
+
+    /**
+     * All active category names for a shop+lang -- the v2 "auto glossary" for inline description
+     * linking. Root/home + any ids in $excludeIds are dropped. Memoised per request
+     * ("$idShop:$idLang") only: ets_superspeed full-page cache means this query only runs on a
+     * cache MISS, and the catalogue is small enough (dozens of categories) that a persistent
+     * cross-request cache would add invalidation complexity for no measurable gain.
+     *
+     * @param array<int,bool> $excludeIds
+     * @return list<array{id:int,name:string,rewrite:string}>
+     */
+    private function descriptionLinkGlossary(int $idLang, int $idShop, array $excludeIds = []): array
+    {
+        $cacheKey = $idShop . ':' . $idLang;
+        if (!isset(self::$glossaryCache[$cacheKey])) {
+            $exclude = $this->excludedCategoryIds() + $this->descriptionLinkExcludedTargetIds();
+            $rows = Db::getInstance(_PS_USE_SQL_SLAVE_)->executeS(
+                'SELECT c.id_category, cl.name, cl.link_rewrite
+                 FROM `' . _DB_PREFIX_ . 'category` c
+                 INNER JOIN `' . _DB_PREFIX_ . 'category_lang` cl
+                     ON cl.id_category = c.id_category AND cl.id_lang = ' . (int) $idLang . ' AND cl.id_shop = ' . (int) $idShop . '
+                 INNER JOIN `' . _DB_PREFIX_ . 'category_shop` cs
+                     ON cs.id_category = c.id_category AND cs.id_shop = ' . (int) $idShop . '
+                 WHERE c.active = 1'
+            );
+            $items = [];
+            if (is_array($rows)) {
+                foreach ($rows as $row) {
+                    $id = (int) ($row['id_category'] ?? 0);
+                    $name = trim((string) ($row['name'] ?? ''));
+                    if ($id <= 0 || $name === '' || isset($exclude[$id])) {
+                        continue;
+                    }
+                    $items[] = ['id' => $id, 'name' => $name, 'rewrite' => (string) ($row['link_rewrite'] ?? '')];
+                }
+            }
+            self::$glossaryCache[$cacheKey] = $items;
+        }
+
+        $items = self::$glossaryCache[$cacheKey];
+        if ($excludeIds !== []) {
+            $items = array_values(array_filter($items, static function (array $it) use ($excludeIds): bool {
+                return !isset($excludeIds[$it['id']]);
+            }));
+        }
+
+        return $items;
+    }
+
+    /**
+     * Merchant-configured category ids that must never become auto-link TARGETS (their own
+     * pages are unaffected -- this only removes them from the glossary of link-worthy names).
+     * Typical use: short/generic spec-style category names (e.g. "FI 160" pipe-diameter
+     * categories) that would otherwise over-match unrelated text even past AKVARC_IL_MINLEN,
+     * because they're long enough in characters but not distinctive enough as a phrase.
+     *
+     * @return array<int,bool>
+     */
+    private function descriptionLinkExcludedTargetIds(): array
+    {
+        $raw = (string) Configuration::get('AKVARC_IL_EXCLUDE_IDS');
+        if ($raw === '') {
+            return [];
+        }
+        $out = [];
+        foreach (explode(',', $raw) as $part) {
+            $id = (int) trim($part);
+            if ($id > 0) {
+                $out[$id] = true;
+            }
+        }
+
+        return $out;
     }
 
     // ------------------------------------------------------------------
@@ -474,6 +737,26 @@ class Akvarelatedcategories extends Module
         Configuration::updateGlobalValue('AKVARC_CAT_MAX', (string) max(1, min(50, (int) Tools::getValue('AKVARC_CAT_MAX'))));
         Configuration::updateGlobalValue('AKVARC_PROD_MAX', (string) max(1, min(50, (int) Tools::getValue('AKVARC_PROD_MAX'))));
 
+        Configuration::updateGlobalValue('AKVARC_IL_ENABLED', Tools::getValue('AKVARC_IL_ENABLED') ? '1' : '0');
+        Configuration::updateGlobalValue('AKVARC_IL_CAT', Tools::getValue('AKVARC_IL_CAT') ? '1' : '0');
+        Configuration::updateGlobalValue('AKVARC_IL_PROD', Tools::getValue('AKVARC_IL_PROD') ? '1' : '0');
+        Configuration::updateGlobalValue('AKVARC_IL_CMS', Tools::getValue('AKVARC_IL_CMS') ? '1' : '0');
+        Configuration::updateGlobalValue('AKVARC_IL_MAX', (string) max(0, min(20, (int) Tools::getValue('AKVARC_IL_MAX'))));
+        Configuration::updateGlobalValue('AKVARC_IL_RANDOM', Tools::getValue('AKVARC_IL_RANDOM') ? '1' : '0');
+        Configuration::updateGlobalValue('AKVARC_IL_MINLEN', (string) max(1, min(40, (int) Tools::getValue('AKVARC_IL_MINLEN'))));
+        Configuration::updateGlobalValue('AKVARC_IL_ONCE', Tools::getValue('AKVARC_IL_ONCE') ? '1' : '0');
+        Configuration::updateGlobalValue('AKVARC_IL_SELF', Tools::getValue('AKVARC_IL_SELF') ? '1' : '0');
+        Configuration::updateGlobalValue('AKVARC_IL_DESC_SHORT', Tools::getValue('AKVARC_IL_DESC_SHORT') ? '1' : '0');
+
+        $excludeIds = [];
+        foreach ((array) Tools::getValue('AKVARC_IL_EXCLUDE_IDS', []) as $rawId) {
+            $id = (int) $rawId;
+            if ($id > 0) {
+                $excludeIds[$id] = true;
+            }
+        }
+        Configuration::updateGlobalValue('AKVARC_IL_EXCLUDE_IDS', implode(',', array_keys($excludeIds)));
+
         $catTitle = [];
         $prodTitle = [];
         foreach (Language::getLanguages(false) as $lang) {
@@ -487,11 +770,49 @@ class Akvarelatedcategories extends Module
         return '<div class="alert alert-success">' . self::esc($this->l('Settings saved.')) . '</div>';
     }
 
+    /**
+     * `<select multiple>` of every active category (current employee's language), for picking
+     * which categories are excluded as inline-link targets. A plain native multi-select rather
+     * than a tree-checkbox widget -- consistent with this module's hand-rolled, no-template BO
+     * style, and perfectly usable for occasional "pick ~20 categories once" edits.
+     */
+    private function descriptionLinkExcludePicker(): string
+    {
+        $idLang = (int) $this->context->language->id;
+        $selected = $this->descriptionLinkExcludedTargetIds();
+        $rows = Db::getInstance()->executeS(
+            'SELECT c.id_category, cl.name
+             FROM `' . _DB_PREFIX_ . 'category` c
+             INNER JOIN `' . _DB_PREFIX_ . 'category_lang` cl
+                 ON cl.id_category = c.id_category AND cl.id_lang = ' . (int) $idLang . '
+             WHERE c.active = 1
+             ORDER BY cl.name ASC'
+        );
+
+        $options = '';
+        if (is_array($rows)) {
+            foreach ($rows as $row) {
+                $id = (int) ($row['id_category'] ?? 0);
+                $name = (string) ($row['name'] ?? '');
+                if ($id <= 0 || $name === '') {
+                    continue;
+                }
+                $options .= '<option value="' . $id . '"' . (isset($selected[$id]) ? ' selected="selected"' : '') . '>'
+                    . self::esc($name) . ' (#' . $id . ')</option>';
+            }
+        }
+
+        return '<select multiple class="form-control" name="AKVARC_IL_EXCLUDE_IDS[]" size="10" style="max-width:520px;">'
+            . $options . '</select>';
+    }
+
     private function renderConfig(): string
     {
         $languages = Language::getLanguages(false);
         $catMax = (int) Configuration::get('AKVARC_CAT_MAX');
         $prodMax = (int) Configuration::get('AKVARC_PROD_MAX');
+        $ilMax = (int) Configuration::get('AKVARC_IL_MAX');
+        $ilMinLen = (int) Configuration::get('AKVARC_IL_MINLEN');
 
         $sw = function (string $name, string $onLabel, string $offLabel): string {
             $on = (string) Configuration::get($name) === '1';
@@ -537,7 +858,22 @@ class Akvarelatedcategories extends Module
             . '<hr><h4>' . self::esc($this->l('Product (at the bottom of the product page)')) . '</h4>'
             . $row($this->l('Number of categories'), $this->l('Maximum number of categories the product belongs to (default 5).'),
                 '<input type="number" min="1" max="50" class="form-control fixed-width-sm" name="AKVARC_PROD_MAX" value="' . $prodMax . '">')
-            . $row($this->l('Block title'), $this->l('Per language.'), $langInputs('AKVARC_PROD_TITLE_', 'AKVARC_PROD_TITLE'));
+            . $row($this->l('Block title'), $this->l('Per language.'), $langInputs('AKVARC_PROD_TITLE_', 'AKVARC_PROD_TITLE'))
+            . '<hr><h4>' . self::esc($this->l('Description internal links (SEO)')) . '</h4>'
+            . $row($this->l('Enable inline linking'), $this->l('Automatically turns mentions of active category names inside category/product/CMS body text into internal links.'), $sw('AKVARC_IL_ENABLED', $this->l('Yes'), $this->l('No')))
+            . $row($this->l('Apply to category descriptions'), '', $sw('AKVARC_IL_CAT', $this->l('Yes'), $this->l('No')))
+            . $row($this->l('Apply to product descriptions'), '', $sw('AKVARC_IL_PROD', $this->l('Yes'), $this->l('No')))
+            . $row($this->l('Apply to CMS pages'), '', $sw('AKVARC_IL_CMS', $this->l('Yes'), $this->l('No')))
+            . $row($this->l('Max links per page'), $this->l('Upper bound on how many category mentions get turned into links in one description (default 3).'),
+                '<input type="number" min="0" max="20" class="form-control fixed-width-sm" name="AKVARC_IL_MAX" value="' . $ilMax . '">')
+            . $row($this->l('Choose randomly'), $this->l('When more mentions are found than the max, pick which ones become links at random instead of always the first ones.'), $sw('AKVARC_IL_RANDOM', $this->l('Yes'), $this->l('No')))
+            . $row($this->l('Minimum name length'), $this->l('Category names shorter than this (in characters) are never auto-linked, to avoid over-matching short or common words (default 3).'),
+                '<input type="number" min="1" max="40" class="form-control fixed-width-sm" name="AKVARC_IL_MINLEN" value="' . $ilMinLen . '">')
+            . $row($this->l('One link per category'), $this->l('Never link the same category more than once within a single description.'), $sw('AKVARC_IL_ONCE', $this->l('Yes'), $this->l('No')))
+            . $row($this->l('Allow self-link'), $this->l('On a category page, also allow linking mentions of that same category\'s own name.'), $sw('AKVARC_IL_SELF', $this->l('Yes'), $this->l('No')))
+            . $row($this->l('Include short description'), $this->l('Also apply inline linking to the product\'s short description (off by default -- links in a short teaser tend to look spammy).'), $sw('AKVARC_IL_DESC_SHORT', $this->l('Yes'), $this->l('No')))
+            . $row($this->l('Never link to these categories'), $this->l('Categories excluded here are never used as auto-link targets (their own pages are unaffected). Use this for generic or spec-like category names (e.g. size/diameter categories) that would otherwise get linked from unrelated text. Hold Ctrl/Cmd to select multiple.'),
+                $this->descriptionLinkExcludePicker());
 
         return '<form method="post" class="form-horizontal">'
             . '<div class="panel">'

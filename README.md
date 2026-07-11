@@ -7,10 +7,17 @@ SEO module for PrestaShop that adds internal-link blocks to category and product
 - **Category pages** — shows a "related categories" block: the parent category, its
   siblings, and its children.
 - **Product pages** — shows the categories the product belongs to.
+- **Description inner-linking** (v1.1.0, opt-in) — automatically turns mentions of your
+  active category names, wherever they appear inside category, product, or CMS page body
+  text, into real internal links. No manual keyword list to maintain: the "glossary" is
+  just your shop's own active categories. A configurable cap limits how many links get
+  injected per page, picked either in reading order or at random, with each category
+  linked at most once per page.
 
-Both blocks are real, crawlable `<a href>` links (no `nofollow`, never hidden), styled
-as a small, muted footer so they stay visually out of the way while still passing
-internal link equity to your category tree.
+All links are real, crawlable `<a href>` (no `nofollow`, never hidden). The footer blocks
+are styled as a small, muted block so they stay visually out of the way while still
+passing internal link equity to your category tree; inline description links inherit
+your theme's normal link styling.
 
 ## Requirements
 
@@ -40,6 +47,14 @@ No configuration is required — sensible defaults are applied automatically.
 | Category block — include parent / siblings / children | All on | Toggle each independently |
 | Product block — max links | 5 | |
 | Block title | Per language | Shown above each block; auto-filled for 12 languages on install |
+| Enable inline linking | **Off** | Master switch for description inner-linking (opt-in) |
+| Apply to category / product / CMS | All on | Which content types get scanned, once enabled |
+| Max links per page | 3 | Upper bound on injected links per description |
+| Choose randomly | On | Random selection among matches vs. always the first ones |
+| Minimum name length | 3 | Category names shorter than this are never auto-linked |
+| One link per category | On | Never link the same category twice in one description |
+| Allow self-link | Off | Whether a category page may link its own name |
+| Include short description | Off | Also scan the product's short description |
 
 ## Multistore
 
