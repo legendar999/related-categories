@@ -2,7 +2,7 @@
 <module>
     <name>akvarelatedcategories</name>
     <displayName><![CDATA[Related categories (SEO internal links)]]></displayName>
-    <version><![CDATA[1.1.1]]></version>
+    <version><![CDATA[1.1.2]]></version>
     <description><![CDATA[SEO internal links: related categories under each category page, and the categories a product belongs to at the bottom of the product page. Plus optional description inner-linking: auto-links mentions of category names inside category/product/CMS body text. Discreet, but fully indexable.]]></description>
     <author><![CDATA[Akva Modules]]></author>
     <tab><![CDATA[seo]]></tab>

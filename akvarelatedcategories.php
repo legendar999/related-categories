@@ -31,7 +31,7 @@ class Akvarelatedcategories extends Module
     {
         $this->name = 'akvarelatedcategories';
         $this->tab = 'seo';
-        $this->version = '1.1.1';
+        $this->version = '1.1.2';
         $this->author = 'Akva Modules';
         $this->need_instance = 0;
         $this->ps_versions_compliancy = ['min' => '1.7.0.0', 'max' => _PS_VERSION_];
@@ -771,10 +771,14 @@ class Akvarelatedcategories extends Module
     }
 
     /**
-     * `<select multiple>` of every active category (current employee's language), for picking
-     * which categories are excluded as inline-link targets. A plain native multi-select rather
-     * than a tree-checkbox widget -- consistent with this module's hand-rolled, no-template BO
-     * style, and perfectly usable for occasional "pick ~20 categories once" edits.
+     * Search-and-add / remove editor for which categories are excluded as inline-link targets.
+     * A native `<select multiple>` (the v1.1.1 first cut) turned out unusable once the catalogue
+     * had 100+ categories -- finding and Ctrl/Cmd-clicking ~20 items in a scrolling list is not a
+     * realistic BO workflow. This replaces it with: a text search (native `<datalist>`
+     * autocomplete, no AJAX -- the whole category list is small enough to embed once) + an "Add"
+     * button, and each already-excluded category rendered as a row with a "-" remove button.
+     * Removed/added categories are plain hidden `AKVARC_IL_EXCLUDE_IDS[]` inputs manipulated by
+     * inline vanilla JS -- the POSTed field shape is unchanged, so processSave() needed no edit.
      */
     private function descriptionLinkExcludePicker(): string
     {
@@ -789,7 +793,9 @@ class Akvarelatedcategories extends Module
              ORDER BY cl.name ASC'
         );
 
-        $options = '';
+        $names = [];
+        $datalist = '';
+        $chips = '';
         if (is_array($rows)) {
             foreach ($rows as $row) {
                 $id = (int) ($row['id_category'] ?? 0);
@@ -797,13 +803,96 @@ class Akvarelatedcategories extends Module
                 if ($id <= 0 || $name === '') {
                     continue;
                 }
-                $options .= '<option value="' . $id . '"' . (isset($selected[$id]) ? ' selected="selected"' : '') . '>'
-                    . self::esc($name) . ' (#' . $id . ')</option>';
+                $names[$id] = $name;
+                $label = $name . ' (#' . $id . ')';
+                $datalist .= '<option data-id="' . $id . '" value="' . self::esc($label) . '"></option>';
             }
         }
+        foreach ($selected as $id => $_true) {
+            $chips .= $this->descriptionLinkExcludeChip((int) $id, $names[$id] ?? ('#' . $id));
+        }
 
-        return '<select multiple class="form-control" name="AKVARC_IL_EXCLUDE_IDS[]" size="10" style="max-width:520px;">'
-            . $options . '</select>';
+        return '<div class="akvarc-il-exclude-editor">'
+            . '<div class="input-group" style="max-width:520px;">'
+            . '<input type="text" id="akvarcIlExcludeSearch" list="akvarcIlExcludeOptions" class="form-control" '
+            . 'placeholder="' . self::esc($this->l('Type a category name...')) . '">'
+            . '<span class="input-group-btn"><button type="button" id="akvarcIlExcludeAdd" class="btn btn-default">+</button></span>'
+            . '</div>'
+            . '<datalist id="akvarcIlExcludeOptions">' . $datalist . '</datalist>'
+            . '<ul id="akvarcIlExcludeList" style="list-style:none;margin:8px 0 0;padding:0;max-width:520px;">' . $chips . '</ul>'
+            . '</div>'
+            . '<script>(function(){
+    var list = document.getElementById("akvarcIlExcludeList");
+    var search = document.getElementById("akvarcIlExcludeSearch");
+    var addBtn = document.getElementById("akvarcIlExcludeAdd");
+    var options = document.getElementById("akvarcIlExcludeOptions");
+
+    function alreadyAdded(id) {
+        return list.querySelector(\'li[data-id="\' + id + \'"]\') !== null;
+    }
+
+    function addRow(id, name) {
+        id = String(id);
+        if (alreadyAdded(id)) { return; }
+        var li = document.createElement("li");
+        li.setAttribute("data-id", id);
+        li.style.cssText = "display:flex;align-items:center;justify-content:space-between;padding:5px 10px;border:1px solid #ddd;border-top:none;background:#fff;";
+        var label = document.createElement("span");
+        label.textContent = name;
+        var btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "btn btn-default btn-xs";
+        btn.textContent = "−";
+        btn.title = "' . self::esc($this->l('Remove')) . '";
+        btn.addEventListener("click", function () { li.parentNode.removeChild(li); });
+        var hidden = document.createElement("input");
+        hidden.type = "hidden";
+        hidden.name = "AKVARC_IL_EXCLUDE_IDS[]";
+        hidden.value = id;
+        li.appendChild(label);
+        li.appendChild(btn);
+        li.appendChild(hidden);
+        list.appendChild(li);
+    }
+
+    function tryAdd() {
+        var val = search.value.trim();
+        if (!val) { return; }
+        var match = null;
+        var opts = options.querySelectorAll("option");
+        for (var i = 0; i < opts.length; i++) {
+            if (opts[i].value === val) { match = opts[i]; break; }
+        }
+        if (!match) {
+            var m = val.match(/#(\\d+)\\)?\\s*$/) || val.match(/^(\\d+)$/);
+            if (m) {
+                for (var j = 0; j < opts.length; j++) {
+                    if (opts[j].getAttribute("data-id") === m[1]) { match = opts[j]; break; }
+                }
+            }
+        }
+        if (match) {
+            addRow(match.getAttribute("data-id"), match.value.replace(/\\s*\\(#\\d+\\)\\s*$/, ""));
+            search.value = "";
+            search.focus();
+        }
+    }
+
+    addBtn.addEventListener("click", tryAdd);
+    search.addEventListener("keydown", function (e) {
+        if (e.key === "Enter") { e.preventDefault(); tryAdd(); }
+    });
+})();</script>';
+    }
+
+    private function descriptionLinkExcludeChip(int $id, string $name): string
+    {
+        return '<li data-id="' . $id . '" style="display:flex;align-items:center;justify-content:space-between;'
+            . 'padding:5px 10px;border:1px solid #ddd;border-top:none;background:#fff;">'
+            . '<span>' . self::esc($name) . '</span>'
+            . '<button type="button" class="btn btn-default btn-xs" onclick="this.parentNode.parentNode.removeChild(this.parentNode)" title="'
+            . self::esc($this->l('Remove')) . '">&minus;</button>'
+            . '<input type="hidden" name="AKVARC_IL_EXCLUDE_IDS[]" value="' . $id . '"></li>';
     }
 
     private function renderConfig(): string
@@ -872,7 +961,7 @@ class Akvarelatedcategories extends Module
             . $row($this->l('One link per category'), $this->l('Never link the same category more than once within a single description.'), $sw('AKVARC_IL_ONCE', $this->l('Yes'), $this->l('No')))
             . $row($this->l('Allow self-link'), $this->l('On a category page, also allow linking mentions of that same category\'s own name.'), $sw('AKVARC_IL_SELF', $this->l('Yes'), $this->l('No')))
             . $row($this->l('Include short description'), $this->l('Also apply inline linking to the product\'s short description (off by default -- links in a short teaser tend to look spammy).'), $sw('AKVARC_IL_DESC_SHORT', $this->l('Yes'), $this->l('No')))
-            . $row($this->l('Never link to these categories'), $this->l('Categories excluded here are never used as auto-link targets (their own pages are unaffected). Use this for generic or spec-like category names (e.g. size/diameter categories) that would otherwise get linked from unrelated text. Hold Ctrl/Cmd to select multiple.'),
+            . $row($this->l('Never link to these categories'), $this->l('Categories excluded here are never used as auto-link targets (their own pages are unaffected). Use this for generic or spec-like category names (e.g. size/diameter categories) that would otherwise get linked from unrelated text. Type a name to search, then Add; click the minus to remove.'),
                 $this->descriptionLinkExcludePicker());
 
         return '<form method="post" class="form-horizontal">'
