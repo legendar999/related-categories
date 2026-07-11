@@ -31,7 +31,7 @@ class Akvarelatedcategories extends Module
     {
         $this->name = 'akvarelatedcategories';
         $this->tab = 'seo';
-        $this->version = '1.1.2';
+        $this->version = '1.1.3';
         $this->author = 'Akva Modules';
         $this->need_instance = 0;
         $this->ps_versions_compliancy = ['min' => '1.7.0.0', 'max' => _PS_VERSION_];
@@ -784,13 +784,18 @@ class Akvarelatedcategories extends Module
     {
         $idLang = (int) $this->context->language->id;
         $selected = $this->descriptionLinkExcludedTargetIds();
+        // `category_lang` is keyed (id_category, id_lang, id_shop) -- one row PER SHOP sharing the
+        // same language, so a plain join without shop-scoping returns the same category name once
+        // per active shop (4x on this install). GROUP BY + MIN() dedupes to one row per category
+        // (names are shop-invariant in practice) and stays ONLY_FULL_GROUP_BY-safe.
         $rows = Db::getInstance()->executeS(
-            'SELECT c.id_category, cl.name
+            'SELECT c.id_category, MIN(cl.name) AS name
              FROM `' . _DB_PREFIX_ . 'category` c
              INNER JOIN `' . _DB_PREFIX_ . 'category_lang` cl
                  ON cl.id_category = c.id_category AND cl.id_lang = ' . (int) $idLang . '
              WHERE c.active = 1
-             ORDER BY cl.name ASC'
+             GROUP BY c.id_category
+             ORDER BY name ASC'
         );
 
         $names = [];
