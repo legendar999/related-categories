@@ -9,10 +9,9 @@
  *
  * This single delegated listener turns a click on any such anchor into a
  * `related_category_click` dataLayer event, so internal-link click-through data
- * becomes visible in GTM/GA4. No consent logic here: the site's single GTM container
- * (owned + consent-gated by the akvamarketing module) is already loaded on every page,
- * and its GA4 tags only fire once consent is granted -- an ungated push is a no-op
- * until then. House dataLayer idiom mirrors akvamarketing.js.
+ * becomes visible in GTM/GA4. No consent logic here: pushing to dataLayer is a no-op
+ * unless a GTM/GA4 setup consumes it, and any consent gating belongs to that setup
+ * (its tags only fire once consent is granted), not to this module.
  *
  * Click tracking only (per the audit) -- no impression/IntersectionObserver view tracking.
  */
