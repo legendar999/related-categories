@@ -27,9 +27,12 @@ your theme's normal link styling.
 
 ## Installation
 
-The module's technical name is `akvarelatedcategories` — PrestaShop requires the
-installed folder/zip to be named exactly that, regardless of what this repository is
-called.
+**Easiest:** download the ready-made ZIP from the [Releases page](https://github.com/legendar999/related-categories/releases)
+and upload it in Back office > Modules > Upload a module. No renaming needed.
+
+If you install from source instead: the module's technical name is
+`akvarelatedcategories` — PrestaShop requires the installed folder/zip to be named
+exactly that, regardless of what this repository is called.
 
 1. Download or clone this repository.
 2. Zip it up so the top-level folder inside the zip is named `akvarelatedcategories`.

@@ -26,7 +26,7 @@ class AkvarcDescriptionLinker
 {
     /**
      * @param array<int,array{id:int,name:string,rewrite:string}> $glossary candidate link targets
-     * @param array{max:int,random:bool,minLen:int,once:bool,entitySeed:string,linkBuilder:callable} $opts
+     * @param array{max:int,random:bool,minLen:int,once:bool,entitySeed:string,variant?:string,linkBuilder:callable} $opts
      */
     public static function process(string $html, array $glossary, array $opts): string
     {
@@ -76,7 +76,7 @@ class AkvarcDescriptionLinker
 
         $linkBuilder = is_callable($opts['linkBuilder'] ?? null) ? $opts['linkBuilder'] : null;
 
-        return self::applySelection($dom, $root, $selected, $linkBuilder);
+        return self::applySelection($dom, $root, $selected, $linkBuilder, (string) ($opts['variant'] ?? ''));
     }
 
     /**
@@ -223,8 +223,9 @@ class AkvarcDescriptionLinker
 
     /**
      * @param list<array{node:\DOMText,start:int,len:int,text:string,cat:array{id:int,name:string,rewrite:string}}> $selected
+     * @param string $variant page type the anchors render on ('category'|'product'|'cms'), for click tracking
      */
-    private static function applySelection(\DOMDocument $dom, \DOMElement $root, array $selected, ?callable $linkBuilder): string
+    private static function applySelection(\DOMDocument $dom, \DOMElement $root, array $selected, ?callable $linkBuilder, string $variant = ''): string
     {
         $byNode = [];
         foreach ($selected as $c) {
@@ -262,6 +263,12 @@ class AkvarcDescriptionLinker
                     $a = $dom->createElement('a');
                     $a->setAttribute('href', $href);
                     $a->setAttribute('class', 'akvarc-inlink');
+                    // Stable click-tracking hooks (v1.2.0) read by views/js/front.js.
+                    $a->setAttribute('data-akvarc-category-id', (string) (int) $it['cat']['id']);
+                    $a->setAttribute('data-akvarc-source', 'description_link');
+                    if ($variant !== '') {
+                        $a->setAttribute('data-akvarc-variant', $variant);
+                    }
                     $a->appendChild($dom->createTextNode($it['text']));
                     $fragments[] = $a;
                 }

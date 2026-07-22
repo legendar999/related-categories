@@ -31,7 +31,7 @@ class Akvarelatedcategories extends Module
     {
         $this->name = 'akvarelatedcategories';
         $this->tab = 'seo';
-        $this->version = '1.1.3';
+        $this->version = '1.2.1';
         $this->author = 'Akva Modules';
         $this->need_instance = 0;
         $this->ps_versions_compliancy = ['min' => '1.7.0.0', 'max' => _PS_VERSION_];
@@ -197,7 +197,7 @@ class Akvarelatedcategories extends Module
     // ------------------------------------------------------------------
 
     /**
-     * Load the FO stylesheet as a raw, versioned <link> (CCC-safe).
+     * Load the FO stylesheet + click-tracking script as raw, versioned assets (CCC-safe).
      */
     public function hookDisplayHeader($params): string
     {
@@ -209,13 +209,32 @@ class Akvarelatedcategories extends Module
         // product pages (displayFooterCategory / displayFooterProduct). Loading its CSS on
         // every page (home, CMS, ...) made it a needless render-blocking request. Gate it.
         $self = isset($this->context->controller->php_self) ? (string) $this->context->controller->php_self : '';
-        if ($self !== 'category' && $self !== 'product') {
+        $blockPage = ($self === 'category' || $self === 'product');
+
+        // Click tracking (v1.2.0) also needs to run on CMS pages, but ONLY when the inline
+        // description-linking feature could have emitted trackable anchors there. The CSS gate
+        // stays narrower (it only styles the block, which never renders on CMS).
+        $cmsInline = $self === 'cms'
+            && (string) Configuration::get('AKVARC_IL_ENABLED') === '1'
+            && (string) Configuration::get('AKVARC_IL_CMS') === '1';
+
+        if (!$blockPage && !$cmsInline) {
             return '';
         }
 
-        return '<link rel="stylesheet" type="text/css" href="'
-            . htmlspecialchars($this->_path . 'views/css/front.css', ENT_QUOTES, 'UTF-8')
-            . '?v=' . rawurlencode($this->version) . '" media="all">';
+        $out = '';
+        if ($blockPage) {
+            $out .= '<link rel="stylesheet" type="text/css" href="'
+                . htmlspecialchars($this->_path . 'views/css/front.css', ENT_QUOTES, 'UTF-8')
+                . '?v=' . rawurlencode($this->version) . '" media="all">';
+        }
+        // Raw, versioned <script> (CCC-safe, same rationale as the CSS above), deferred so it
+        // never blocks render. Delegated click listener -> window.dataLayer.
+        $out .= '<script src="'
+            . htmlspecialchars($this->_path . 'views/js/front.js', ENT_QUOTES, 'UTF-8')
+            . '?v=' . rawurlencode($this->version) . '" defer></script>';
+
+        return $out;
     }
 
     /**
@@ -419,15 +438,20 @@ class Akvarelatedcategories extends Module
             && (string) Configuration::get($scopeKey) === '1';
     }
 
-    /** @return array{max:int,random:bool,minLen:int,once:bool,entitySeed:string,linkBuilder:callable} */
+    /** @return array{max:int,random:bool,minLen:int,once:bool,entitySeed:string,variant:string,linkBuilder:callable} */
     private function descriptionLinkOptions(string $entityType, int $entityId, int $idLang): array
     {
+        // The generated inline anchors carry a data-akvarc-variant reflecting the page type
+        // they render on, so click tracking (views/js/front.js) can distinguish them.
+        $variantMap = ['cat' => 'category', 'prod' => 'product', 'cms' => 'cms'];
+
         return [
             'max' => max(0, (int) Configuration::get('AKVARC_IL_MAX')),
             'random' => (string) Configuration::get('AKVARC_IL_RANDOM') === '1',
             'minLen' => max(1, (int) Configuration::get('AKVARC_IL_MINLEN')),
             'once' => (string) Configuration::get('AKVARC_IL_ONCE') === '1',
             'entitySeed' => $entityType . ':' . $entityId,
+            'variant' => $variantMap[$entityType] ?? $entityType,
             'linkBuilder' => function (array $cat) use ($idLang): string {
                 $rewrite = $cat['rewrite'] !== '' ? $cat['rewrite'] : null;
 
@@ -700,9 +724,16 @@ class Akvarelatedcategories extends Module
         // tech, so no accessible name is lost.
         $h .= '<p class="akva-rc__title">' . self::esc($label) . '</p>';
         $h .= '<ul class="akva-rc__list">';
+        // Stable tracking hooks (v1.2.0): a delegated front-end listener (views/js/front.js)
+        // reads these to push a `related_category_click` dataLayer event. $variant is already
+        // 'category' or 'product' here; the block links are always source="related_block".
         foreach ($items as $it) {
             $h .= '<li class="akva-rc__item"><a class="akva-rc__link" href="'
-                . self::esc($it['url']) . '">' . self::esc($it['name']) . '</a></li>';
+                . self::esc($it['url'])
+                . '" data-akvarc-category-id="' . (int) $it['id'] . '"'
+                . ' data-akvarc-source="related_block"'
+                . ' data-akvarc-variant="' . self::esc($variant) . '">'
+                . self::esc($it['name']) . '</a></li>';
         }
         $h .= '</ul></nav>';
 
